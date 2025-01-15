@@ -7,6 +7,9 @@
         mc:Ignorable="d"
         Title="MainWindow" Height="450" Width="800">
     <Grid>
+        <ListBox x:Name="MessageBox" d:ItemsSource="{d:SampleData ItemCount=5}" SelectionChanged="ListBox_SelectionChanged"/>
+        <Button x:Name="Send" Content="Button" HorizontalAlignment="Left" Margin="575,321,0,0" VerticalAlignment="Top" RenderTransformOrigin="8.283,5.453" Click="Button_Click"/>
+        <TextBox x:Name="MessageHere" TextWrapping="Wrap" Text="TextBox" Margin="163,291,249,63"/>
 
     </Grid>
 </Window>
