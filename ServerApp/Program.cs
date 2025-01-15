@@ -1,104 +1,100 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
-using System.Threading;
+using System.Threading.Tasks;
+using System.Net.WebSockets;
 
-// Console-based Server with Logging
-class ChatServer
+class Program
 {
-    private static TcpListener server;
-    private static List<TcpClient> clients = new List<TcpClient>();
-    private static readonly object lockObj = new object();
+    private static TcpListener listener;
+    private static Dictionary<TcpClient, string> clients = new Dictionary<TcpClient, string>();
+    private static string logFilePath = "server_log.txt";
 
-    static void Main()
+    static async Task Main(string[] args)
     {
-        server = new TcpListener(IPAddress.Any, 12345);
-        server.Start();
-        Console.WriteLine("Server started on port 12345...");
+        int port = 5000;
 
-        Thread acceptThread = new Thread(AcceptClients);
-        acceptThread.Start();
-    }
+        // Start the TCP Listener on the chosen IP and port
+        listener = new TcpListener(IPAddress.Any, port);
+        listener.Start();
+        LogMessage($"Server started on port {port}");
 
-    static void AcceptClients()
-    {
+        Directory.CreateDirectory("Files"); // Ensure the "Files" directory exists
+
         while (true)
         {
-            TcpClient client = server.AcceptTcpClient();
-            lock (lockObj)
-            {
-                clients.Add(client);
-            }
-
-            Console.WriteLine("New client connected!");
-            LogMessage("New client connected.");
-
-            Thread clientThread = new Thread(() => HandleClient(client));
-            clientThread.Start();
+            var client = await listener.AcceptTcpClientAsync();
+            _ = Task.Run(() => HandleClient(client));
         }
     }
 
-    static void HandleClient(TcpClient client)
+    static async Task HandleClient(TcpClient client)
     {
-        NetworkStream stream = client.GetStream();
-        byte[] buffer = new byte[1024];
+        var stream = client.GetStream();
+        var buffer = new byte[1024];
 
-        try
+        // Read the client's name (first message)
+        int nameBytes = await stream.ReadAsync(buffer, 0, buffer.Length);
+        string clientName = Encoding.UTF8.GetString(buffer, 0, nameBytes).Trim();
+        clients[client] = clientName;
+
+        LogMessage($"{clientName} connected.");
+
+        while (true)
         {
-            while (true)
+            try
             {
-                int bytesRead = stream.Read(buffer, 0, buffer.Length);
+                int bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
                 if (bytesRead == 0) break;
 
-                string message = Encoding.ASCII.GetString(buffer, 0, bytesRead);
-                LogMessage($"Received: {message}");
-                BroadcastMessage(message);
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine("Error: " + ex.Message);
-            LogMessage("Error: " + ex.Message);
-        }
-        finally
-        {
-            lock (lockObj)
-            {
-                clients.Remove(client);
-            }
-            client.Close();
-            Console.WriteLine("Client disconnected.");
-            LogMessage("Client disconnected.");
-        }
-    }
+                string message = Encoding.UTF8.GetString(buffer, 0, bytesRead).Trim();
 
-    static void BroadcastMessage(string message)
-    {
-        lock (lockObj)
-        {
-            foreach (var client in clients)
+                if (message == "file_upload")
+                {
+                    LogMessage($"{clientName} initiated file upload.");
+                    string fileName = $"Files/{DateTime.Now:yyyyMMddHHmmss}.txt";
+                    using (var fileStream = new FileStream(fileName, FileMode.Create, FileAccess.Write))
+                    {
+                        LogMessage("Receiving file...");
+                        while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                        {
+                            await fileStream.WriteAsync(buffer, 0, bytesRead);
+                            if (bytesRead < buffer.Length) break;
+                        }
+                    }
+                    LogMessage($"File received and saved as {fileName}");
+                    continue;
+                }
+
+                LogMessage($"Received from {clientName}: {message}");
+
+                foreach (var c in clients.Keys)
+                {
+                    if (c != client)
+                    {
+                        var writer = c.GetStream();
+                        await writer.WriteAsync(buffer, 0, bytesRead);
+                    }
+                }
+            }
+            catch
             {
-                try
-                {
-                    NetworkStream stream = client.GetStream();
-                    byte[] messageBytes = Encoding.ASCII.GetBytes(message);
-                    stream.Write(messageBytes, 0, messageBytes.Length);
-                }
-                catch
-                {
-                    Console.WriteLine("Failed to send message to a client.");
-                }
+                LogMessage($"{clientName} disconnected.");
+                clients.Remove(client);
+                break;
             }
         }
     }
 
     static void LogMessage(string message)
     {
-        string logEntry = $"[{DateTime.Now}] {message}";
-        Console.WriteLine(logEntry);
-        // Optionally log to a file:
-        System.IO.File.AppendAllText("server_log.txt", logEntry + Environment.NewLine);
+        Console.WriteLine(message);
+        using (var writer = new StreamWriter(logFilePath, true))
+        {
+            writer.WriteLine($"{DateTime.Now:yyyy-MM-dd HH:mm:ss} - {message}");
+        }
     }
 }
